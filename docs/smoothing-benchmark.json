@@ -1,0 +1,14 @@
+{
+  "sigma_arcsec": 3.0,
+  "timeout_seconds": 60,
+  "method": "normalized Gaussian on sparse original HEALPix centres, spherical distances, 4 sigma support; no coarsening",
+  "native_nside": 131072,
+  "cutoff_sigma": 4,
+  "stages": {
+    "read_and_tree_seconds": 1.4218732909999998
+  },
+  "processed_cells": 3726336,
+  "total_cells": 4210860,
+  "status": "timed_out",
+  "elapsed_seconds": 60.004220040999996
+}

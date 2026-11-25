@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1795594256757,
+      "tag": "0000_normal_sir_ram",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1795595215956,
+      "tag": "0001_wise_microbe",
+      "breakpoints": true
+    }
+  ]
+}
