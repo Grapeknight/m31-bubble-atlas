@@ -1,0 +1,3 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';
+import {usernameWidth,validUsername} from '../lib/usernames.ts';
+test('username width accepts ten Han or twenty Latin characters and validates mixed boundaries',()=>{assert.ok(validUsername('汉'.repeat(10)));assert.ok(!validUsername('汉'.repeat(11)));assert.ok(validUsername('A'.repeat(20)));assert.ok(!validUsername('A'.repeat(21)));assert.ok(validUsername('汉'.repeat(9)+'AB'));assert.ok(!validUsername('汉'.repeat(9)+'ABC'));assert.equal(usernameWidth('ＡＢ'),2);assert.ok(!validUsername('  '));assert.ok(!validUsername('\u0301'));assert.ok(!validUsername('name\u200b'));});

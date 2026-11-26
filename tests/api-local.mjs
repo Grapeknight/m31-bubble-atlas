@@ -13,17 +13,20 @@ async function call(path,method='GET',body,session='',expected=200){
 }
 try{
  await call('/api/profiles');
- const prefix='QA-'+Date.now();
+ const prefix='QA'+Date.now().toString(36);
  const a=await call('/api/profiles','POST',{action:'create',name:prefix+'-A'});created.push(a.data.profile.id);
  const b=await call('/api/profiles','POST',{action:'create',name:prefix+'-B'});created.push(b.data.profile.id);
  const aid=a.data.profile.id,bid=b.data.profile.id;
  await call('/api/profiles','POST',{action:'create',name:(' '+prefix+'-a ')} ,'',409);
- const base={x:meta.crpix[0]-1,y:meta.crpix[1]-1,rx:30,ry:17,theta:.3,name:'QA shell',notes:'test',confidence:'candidate',map_id:meta.id};
+ const base={x:meta.crpix[0]-1,y:meta.crpix[1]-1,rx:30,ry:17,theta:.3,name:'QA shell',notes:'test',confidence:'silver',map_id:meta.id};
  await call('/api/bubbles','POST',{...base,profile_id:aid},'',401);
  const one=(await call('/api/bubbles','POST',{...base,profile_id:aid},a.cookie,201)).data.bubble;bubbles.push(one.id);
  const two=(await call('/api/bubbles','POST',{...base,name:'second',profile_id:aid},a.cookie,201)).data.bubble;bubbles.push(two.id);
  const other=(await call('/api/bubbles','POST',{...base,name:'other user',profile_id:bid},b.cookie,201)).data.bubble;bubbles.push(other.id);
- const list=(await call('/api/bubbles?profile='+aid)).data.bubbles;assert.equal(list.length,2);assertions++;
+ // Simulate a pre-update stored label; public API must preserve its meaning.
+ const legacyDir='.wrangler/state/v3/d1/miniflare-D1DatabaseObject';
+ for(const f of readdirSync(legacyDir).filter(f=>f.endsWith('.sqlite')&&f!=='metadata.sqlite')){const db=new DatabaseSync(legacyDir+'/'+f);db.prepare("UPDATE bubbles SET confidence='candidate' WHERE id=?").run(one.id);db.close();}
+ const list=(await call('/api/bubbles?profile='+aid)).data.bubbles;assert.equal(list.length,2);assertions++;assert.equal(list.find(b=>b.id===one.id).confidence,'silver');assertions++;
  assert.ok(list.every(x=>x.id!==other.id));assertions++;
  const readOther=await call('/api/bubbles?profile='+bid,'GET',undefined,a.cookie);assert.equal(readOther.data.bubbles[0].id,other.id);assertions++;
  await call('/api/bubbles','POST',{...other,profile_id:aid},a.cookie,409);
@@ -38,7 +41,21 @@ try{
  await call('/api/bubbles','POST',null,a.cookie,400);
  const cross=await fetch(origin+'/api/bubbles',{method:'POST',headers:{Cookie:a.cookie,'Content-Type':'application/json',Origin:'https://unrelated.invalid'},body:JSON.stringify({...base,profile_id:aid})});assert.equal(cross.status,403);assertions++;
  await call('/api/bubbles','DELETE',{id:one.id,revision:2,profile_id:aid},a.cookie);
- const switcher=await call('/api/profiles','POST',{action:'select',id:bid},a.cookie);assert.equal(switcher.data.profile.id,bid);assertions++;
+ const oldName=prefix+'-A',newName=prefix+'-renamed';
+ await call('/api/profiles','POST',{action:'rename',id:aid,expected_name:oldName,name:newName},'',401);
+ await call('/api/profiles','POST',{action:'rename',id:bid,expected_name:prefix+'-B',name:newName},a.cookie,403);
+ await call('/api/profiles','POST',{action:'rename',id:aid,expected_name:oldName,name:prefix+'-B'},a.cookie,409);
+ const renamed=(await call('/api/profiles','POST',{action:'rename',id:aid,expected_name:oldName,name:newName},a.cookie)).data.profile;
+ assert.equal(renamed.id,aid);assert.equal(renamed.name,newName);assertions+=2;
+ assert.deepEqual((await call('/api/bubbles?profile='+aid)).data.bubbles,[two]);assertions++;
+ await call('/api/profiles','POST',{action:'delete',id:aid,expected_name:oldName,confirm_name:oldName},a.cookie,409);
+ await call('/api/profiles','POST',{action:'delete',id:aid,expected_name:newName,confirm_name:'wrong'},a.cookie,400);
+ const anotherSession=await call('/api/profiles','POST',{action:'select',id:aid});
+ await call('/api/profiles','POST',{action:'delete',id:aid,expected_name:newName,confirm_name:newName},a.cookie);
+ await call('/api/bubbles?profile='+aid,'GET',undefined,'',404);
+ await call('/api/bubbles','POST',{...base,profile_id:aid},anotherSession.cookie,401);
+ assert.equal((await call('/api/bubbles?profile='+bid)).data.bubbles[0].id,other.id);assertions++;
+ const switcher=await call('/api/profiles','POST',{action:'select',id:bid},b.cookie);assert.equal(switcher.data.profile.id,bid);assertions++;
  await call('/api/bubbles','POST',{...base,profile_id:aid},switcher.cookie,409);
  await call('/api/profiles','POST',{action:'logout'},switcher.cookie);
  await call('/api/bubbles','POST',{...base,profile_id:bid},switcher.cookie,401);

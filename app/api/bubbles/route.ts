@@ -20,7 +20,7 @@ function validate(body:Record<string,unknown>){
  if(x<0||y<0||x>META.width-1||y>META.height-1||rx<.5||ry<.5||rx>2000||ry>2000||Math.abs(theta)>1000)throw new Error('椭圆中心或大小超出允许范围。');
  if(typeof body.name!=='string'||!body.name.trim()||body.name.length>100)throw new Error('名称应为 1–100 个字符。');
  if(typeof body.notes!=='string'||body.notes.length>4000)throw new Error('备注最多 4000 个字符。');
- if(!['candidate','likely','uncertain'].includes(body.confidence as string))throw new Error('分类无效。');
+ if(!['silver','gold','bronze'].includes(body.confidence as string))throw new Error('分类无效。');
  if(body.map_id!==META.id)throw new Error('地图版本不匹配，请刷新页面。');
  return {x,y,rx,ry,theta,name:body.name.trim(),notes:body.notes,confidence:body.confidence as string};
 }
@@ -31,7 +31,7 @@ export async function GET(request:Request){
  const profile=await auth.db!.prepare('SELECT id,name FROM profiles WHERE id=?').bind(owner).first();
  if(!profile)return reply({error:'该用户名不存在。'},404);
  const {results}=await auth.db!.prepare(`SELECT ${columns} FROM bubbles WHERE user_id=? ORDER BY created_at DESC,id`).bind(owner).all();
- return reply({bubbles:results.map(r=>({...r,pa_defined:!!r.pa_defined}))});
+ return reply({bubbles:results.map(r=>({...r,pa_defined:!!r.pa_defined,confidence:({likely:'gold',candidate:'silver',uncertain:'bronze'} as Record<string,string>)[r.confidence as string]||r.confidence}))});
 }
 export async function POST(request:Request){
  const auth=await authorize(request,true);if(auth.error)return auth.error;
@@ -48,10 +48,12 @@ export async function POST(request:Request){
    if(!result.meta.changes)return reply({error:'该记录已在另一页面修改或删除。请重新载入列表后再保存。'},409);
   }else{
    id=crypto.randomUUID();
-   await auth.db!.prepare('INSERT INTO bubbles (id,user_id,map_id,name,notes,confidence,x,y,rx,ry,theta,ra,dec,a_arcsec,b_arcsec,pa_deg,pa_defined,revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)').bind(id,owner,META.id,g.name,g.notes,g.confidence,g.x,g.y,g.rx,g.ry,g.theta,sky.ra,sky.dec,sky.a_arcsec,sky.b_arcsec,sky.pa_deg,sky.pa_defined?1:0,now,now).run();
+   const inserted=await auth.db!.prepare('INSERT INTO bubbles (id,user_id,map_id,name,notes,confidence,x,y,rx,ry,theta,ra,dec,a_arcsec,b_arcsec,pa_deg,pa_defined,revision,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,? WHERE EXISTS (SELECT 1 FROM profiles WHERE id=?)').bind(id,owner,META.id,g.name,g.notes,g.confidence,g.x,g.y,g.rx,g.ry,g.theta,sky.ra,sky.dec,sky.a_arcsec,sky.b_arcsec,sky.pa_deg,sky.pa_defined?1:0,now,now,owner).run();
+   if(!inserted.meta.changes)return reply({error:'用户名已删除，请重新选择。'},409);
   }
   const saved=await auth.db!.prepare(`SELECT ${columns} FROM bubbles WHERE id=? AND user_id=?`).bind(id,owner).first();
-  return reply({bubble:{...saved,pa_defined:!!saved!.pa_defined}},body.id?200:201);
+  if(!saved)return reply({error:'记录或用户名已删除，请刷新。'},409);
+  return reply({bubble:{...saved,pa_defined:!!saved.pa_defined}},body.id?200:201);
  }catch(e){if(e instanceof SyntaxError||e instanceof Error&&/参数|名称|备注|分类|地图|椭圆/.test(e.message))return reply({error:(e as Error).message},400);console.error('bubble save failed');return reply({error:'保存失败，请保留草稿并重试。'},500);}
 }
 export async function DELETE(request:Request){

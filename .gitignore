@@ -43,3 +43,8 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Local manual artifacts (documentation is maintained in the website)
+/output/
+__pycache__/
+*.pyc

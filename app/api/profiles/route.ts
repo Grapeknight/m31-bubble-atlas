@@ -1,3 +1,4 @@
+import {validUsername} from '../../../lib/usernames';
 import {env} from 'cloudflare:workers';
 import {currentProfile,hashToken,tokenFromCookie,writeCookie} from '../../../lib/profiles';
 const reply=(v:unknown,status=200,extra:Record<string,string>={})=>Response.json(v,{status,headers:{'Cache-Control':'no-store',...extra}});
@@ -17,11 +18,33 @@ export async function POST(request:Request){
    const token=tokenFromCookie(request.headers.get('cookie'));if(token)await env.DB.prepare('DELETE FROM profile_sessions WHERE token_hash=?').bind(await hashToken(token)).run();
    return reply({profile:null},200,{'Set-Cookie':writeCookie('',request,0)});
   }
+  if(body.action==='rename'||body.action==='delete'){
+   const current=await currentProfile(request.headers.get('cookie'));
+   if(!current)return reply({error:'请先选择要管理的用户名。'},401);
+   if(body.id!==current.id)return reply({error:'只能管理当前选择的用户名，请先切换。'},403);
+   if(body.expected_name!==current.name)return reply({error:'用户名已变更，请刷新名单后重试。'},409);
+   if(body.action==='rename'){
+    if(typeof body.name!=='string')return reply({error:'请输入新用户名。'},400);
+    const name=body.name.trim().normalize('NFKC');
+    if(!validUsername(name))return reply({error:'用户名最多 10 个汉字或 20 个半角字符，不能包含控制字符。'},400);
+    const result=await env.DB.prepare('UPDATE OR IGNORE profiles SET name=?,normalized_name=? WHERE id=? AND name=?').bind(name,name.toLocaleLowerCase('en-US'),current.id,current.name).run();
+    if(!result.meta.changes)return reply({error:'新用户名已存在，或名单已更新。请换一个名字或刷新后重试。'},409);
+    return reply({profile:{id:current.id,name}});
+   }
+   if(body.confirm_name!==current.name)return reply({error:'请输入完整用户名以确认删除。'},400);
+   const results=await env.DB.batch([
+    env.DB.prepare('DELETE FROM bubbles WHERE user_id=? AND EXISTS (SELECT 1 FROM profiles WHERE id=? AND name=?)').bind(current.id,current.id,current.name),
+    env.DB.prepare('DELETE FROM profile_sessions WHERE profile_id=? AND EXISTS (SELECT 1 FROM profiles WHERE id=? AND name=?)').bind(current.id,current.id,current.name),
+    env.DB.prepare('DELETE FROM profiles WHERE id=? AND name=?').bind(current.id,current.name),
+   ]);
+   if(!results[2].meta.changes)return reply({error:'用户名已变更或删除，请刷新名单。'},409);
+   return reply({profile:null,deleted_id:current.id},200,{'Set-Cookie':writeCookie('',request,0)});
+  }
   let profile:{id:string;name:string}|null=null;
   if(body.action==='create'){
    if(typeof body.name!=='string')return reply({error:'请输入用户名。'},400);
    const name=body.name.trim().normalize('NFKC'),normalized=name.toLocaleLowerCase('en-US');
-   if(name.length<1||name.length>32||/[\u0000-\u001f\u007f]/.test(name))return reply({error:'用户名应为 1–32 个字符，不能包含控制字符。'},400);
+   if(!validUsername(name))return reply({error:'用户名最多 10 个汉字或 20 个半角字符，不能包含控制字符。'},400);
    const id=crypto.randomUUID(),result=await env.DB.prepare('INSERT INTO profiles (id,name,normalized_name,created_at) VALUES (?,?,?,?) ON CONFLICT(normalized_name) DO NOTHING').bind(id,name,normalized,new Date().toISOString()).run();
    if(!result.meta.changes)return reply({error:'该用户名已存在，请从名单选择，或换一个名字。'},409);
    profile={id,name};
