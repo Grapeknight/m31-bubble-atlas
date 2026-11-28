@@ -3,7 +3,6 @@
 import { useI18n } from './i18n';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, RefreshCw, BarChart3, Info, ArrowUpRight } from 'lucide-react';
-import type { Bubble } from '../lib/bubbles';
 import type { MapMeta } from '../lib/astro';
 import type { Profile } from '../lib/profiles';
 import { DEFAULT_GALAXY, GALAXY_SOURCE, measureBubble, validGalaxy, quantile, histogram, type CatalogBubble, type MeasuredBubble, type GalaxyGeometry } from '../lib/statistics';
@@ -79,13 +78,13 @@ function PlotHeader({
   return <header><div><h3>{title}</h3><p>{subtitle}</p></div><button title={tr("下载") + title + ' SVG'} onClick={download}><Download size={15} /></button></header>;
 }
 export default function StatisticsPanel({
-  items,
+  activeProfile,
   viewingId,
   viewingName,
   meta,
   onHelp
 }: {
-  items: Bubble[];
+  activeProfile: Profile | null;
   viewingId: string;
   viewingName: string;
   meta: MapMeta;
@@ -99,7 +98,8 @@ export default function StatisticsPanel({
     silver: tr("白银"),
     bronze: tr("青铜")
   };
-  const [scope, setScope] = useState(viewingId ? 'current' : 'all'),
+  const advanced=activeProfile?.role==='advanced';
+  const [scope, setScope] = useState(advanced ? (viewingId ? 'current' : 'all') : 'mine'),
     [grade, setGrade] = useState('all'),
     [basis, setBasis] = useState<'disk' | 'projected'>('disk'),
     [bins, setBins] = useState(10);
@@ -119,63 +119,20 @@ export default function StatisticsPanel({
     scatterRef = useRef<SVGSVGElement>(null),
     gradeRef = useRef<SVGSVGElement>(null);
   useEffect(() => {
-    if (scope === 'current') return;
     let stopped = false;
     const abort = new AbortController();
-    setLoading(true);
-    setError('');
-    setRecords([]);
-    (async () => {
-      const pr = await fetch('/api/profiles', {
-        cache: 'no-store',
-        signal: abort.signal
-      });
-      if (!pr.ok) throw new Error(tr("参与者名单加载失败。"));
-      const pd = (await pr.json()) as {
-        profiles: Profile[];
-      };
-      const groups: CatalogBubble[][] = new Array(pd.profiles.length);
-      let next = 0;
-      await Promise.all(Array.from({
-        length: Math.min(4, pd.profiles.length)
-      }, async () => {
-        while (next < pd.profiles.length) {
-          const index = next++,
-            p = pd.profiles[index],
-            r = await fetch('/api/bubbles?profile=' + encodeURIComponent(p.id), {
-              cache: 'no-store',
-              signal: abort.signal
-            });
-          if (!r.ok) throw new Error(tr("目录「") + p.name + tr("」加载失败，请刷新重试。"));
-          const d = (await r.json()) as {
-            bubbles: Bubble[];
-          };
-          groups[index] = d.bubbles.map(b => ({
-            ...b,
-            observer_id: p.id,
-            observer_name: p.name
-          }));
-        }
-      }));
-      if (!stopped) {
-        setRecords(groups.flat());
-        setLoadedAt(new Date().toLocaleTimeString('zh-CN'));
-      }
-    })().catch(e => {
-      if (!stopped) setError((e as Error).message);
-    }).finally(() => {
-      if (!stopped) setLoading(false);
-    });
-    return () => {
-      stopped = true;
-      abort.abort();
-    };
-  }, [scope, refresh]);
-  const source = useMemo(() => scope === 'current' ? items.map(b => ({
-    ...b,
-    observer_id: viewingId,
-    observer_name: viewingName
-  })) : records, [scope, items, records, viewingId, viewingName]);
+    setLoading(true);setError('');setRecords([]);
+    const owner=scope==='mine'?activeProfile?.id:viewingId;
+    const query=scope==='all'?'scope=all':'scope=current&profile='+encodeURIComponent(owner||'');
+    (async()=>{
+      const response=await fetch('/api/statistics?'+query,{cache:'no-store',signal:abort.signal});
+      const data=await response.json() as {records:CatalogBubble[];error?:string};
+      if(!response.ok)throw new Error(tr(data.error||"请求失败，请重试。"));
+      if(!stopped){setRecords(data.records);setLoadedAt(new Date().toLocaleTimeString());}
+    })().catch(e=>{if(!stopped)setError((e as Error).message);}).finally(()=>{if(!stopped)setLoading(false);});
+    return ()=>{stopped=true;abort.abort();};
+  },[scope,refresh,viewingId,activeProfile?.id,activeProfile?.role]);
+  const source=records;
   const measured = useMemo(() => source.map(b => measureBubble(b, meta, settings)).filter((b): b is MeasuredBubble => b !== null), [source, meta, settings]);
   const filtered = measured.filter(b => grade === 'all' || b.confidence === grade),
     sizes = filtered.map(b => b[basis].equivalent_diameter_pc);
@@ -192,7 +149,7 @@ export default function StatisticsPanel({
       count: filtered.filter(b => b.confidence === k).length
     })),
     maxGrade = Math.max(1, ...counts.map(c => c.count));
-  const blocked = scope !== 'current' && (loading || !!error),
+  const blocked = loading || !!error,
     empty = blocked || filtered.length === 0;
   function apply() {
     const v = {
@@ -208,7 +165,7 @@ export default function StatisticsPanel({
     setSettingsError('');
   }
   function downloadPlot(svg: SVGSVGElement | null, name: string) {
-    chartDownload(svg, name, `M31 · D=${settings.distance_kpc} kpc · i=${settings.inclination_deg}° · PA=${settings.pa_deg}° · N=${filtered.length} · ${scope === 'all' ? tr("所有参与者") : viewingName} · ${grade === 'all' ? tr("全部分类") : GRADES[grade as keyof typeof GRADES]}`);
+    chartDownload(svg, name, `M31 · D=${settings.distance_kpc} kpc · i=${settings.inclination_deg}° · PA=${settings.pa_deg}° · N=${filtered.length} · ${scope === 'all' ? tr("所有参与者") : scope==='mine'?activeProfile?.name||'':viewingName} · ${grade === 'all' ? tr("全部分类") : GRADES[grade as keyof typeof GRADES]}`);
   }
   function exportTable() {
     const cols = ['observer', 'id', 'name', 'confidence', 'ra_deg', 'dec_deg', 'a_arcsec', 'b_arcsec', 'bubble_pa_deg', 'map_id', 'projected_major_pc', 'projected_minor_pc', 'projected_equivalent_diameter_pc', 'disk_major_pc', 'disk_minor_pc', 'disk_equivalent_diameter_pc', 'disk_area_pc2', 'disk_axis_ratio', 'galactocentric_radius_kpc', 'distance_kpc', 'inclination_deg', 'disk_pa_deg'];
@@ -222,7 +179,8 @@ export default function StatisticsPanel({
   }
   return <div className="statistics-panel">
   <div className="stats-heading"><div><span className="eyebrow">M31 BUBBLE ATLAS / CATALOG STATISTICS</span><h2 id="modal-title">{tr("气泡统计图谱")}</h2><p>{tr("按已保存的椭圆记录计算 \xB7 不包含未确认草稿")}</p></div><button className="stats-help" onClick={onHelp}><Info size={15} />{tr(" 统计方法与使用说明")}</button></div>
-  <div className="stats-filters"><label>{tr("目录范围")}<select aria-label={tr("统计目录范围")} value={scope} onChange={e => setScope(e.target.value)}><option value="current" disabled={!viewingId}>{tr("当前目录")}{viewingName ? ' · ' + viewingName : ''}</option><option value="all">{tr("所有参与者")}</option></select></label><label>{tr("标注分类")}<select aria-label={tr("统计分类")} value={grade} onChange={e => setGrade(e.target.value)}><option value="all">{tr("全部分类")}</option>{Object.entries(GRADES).map(([k, v]) => <option value={k} key={k}>{v}</option>)}</select></label><label>{tr("散点与表格尺寸")}<select aria-label={tr("统计尺寸口径")} value={basis} onChange={e => setBasis(e.target.value as 'disk' | 'projected')}><option value="disk">{tr("盘面去投影估计")}</option><option value="projected">{tr("天球投影")}</option></select></label><label>{tr("直方图分箱")}<select aria-label={tr("统计分箱数")} value={bins} onChange={e => setBins(+e.target.value)}>{[5, 10, 15, 20, 30].map(n => <option value={n} key={n}>{n}{tr(" 箱")}</option>)}</select></label>{scope === 'all' && <button title={tr("刷新所有参与者统计")} disabled={loading} onClick={() => setRefresh(n => n + 1)}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>}<button className="stats-export" disabled={empty} onClick={exportTable}><Download size={15} />{tr(" 导出统计 CSV")}</button></div>
+  <p className="stats-permission-note">{tr(advanced?"高级用户：可查看他人数量、各目录及全体统计。":"普通用户：仅显示自己的统计；浏览他人标注图不显示数量和统计。")}</p>
+  <div className="stats-filters"><label>{tr("目录范围")}<select aria-label={tr("统计目录范围")} value={scope} onChange={e => setScope(e.target.value)}>{activeProfile && <option value="mine">{tr("我的目录")}</option>}{advanced && <><option value="current" disabled={!viewingId}>{tr("当前目录")}{viewingName ? ' · ' + viewingName : ''}</option><option value="all">{tr("所有参与者")}</option></>}</select></label><label>{tr("标注分类")}<select aria-label={tr("统计分类")} value={grade} onChange={e => setGrade(e.target.value)}><option value="all">{tr("全部分类")}</option>{Object.entries(GRADES).map(([k, v]) => <option value={k} key={k}>{v}</option>)}</select></label><label>{tr("散点与表格尺寸")}<select aria-label={tr("统计尺寸口径")} value={basis} onChange={e => setBasis(e.target.value as 'disk' | 'projected')}><option value="disk">{tr("盘面去投影估计")}</option><option value="projected">{tr("天球投影")}</option></select></label><label>{tr("直方图分箱")}<select aria-label={tr("统计分箱数")} value={bins} onChange={e => setBins(+e.target.value)}>{[5, 10, 15, 20, 30].map(n => <option value={n} key={n}>{n}{tr(" 箱")}</option>)}</select></label><button title={tr("刷新统计")} disabled={loading} onClick={() => setRefresh(n => n + 1)}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button><button className="stats-export" disabled={empty} onClick={exportTable}><Download size={15} />{tr(" 导出统计 CSV")}</button></div>
   <details className="stats-geometry"><summary>{tr("星系几何参数 ")}<span>D = {settings.distance_kpc} kpc · i = {settings.inclination_deg}° · PA = {settings.pa_deg}°</span></summary><div>{(['distance_kpc', 'inclination_deg', 'pa_deg'] as const).map(k => <label key={k}>{{
             distance_kpc: tr("距离 D / kpc"),
             inclination_deg: tr("倾角 i / deg"),
@@ -240,7 +198,7 @@ export default function StatisticsPanel({
           setSettingsError('');
         }}>{tr("恢复默认")}</button></div>{settingsError && <p role="alert" className="stats-error">{settingsError}</p>}<p>{tr("默认参数参考 ")}<a href={GALAXY_SOURCE} target="_blank" rel="noreferrer">Zhang et al. 2024 <ArrowUpRight size={11} /></a>{tr("；中心 RA ")}{meta.crval[0]}°，Dec {meta.crval[1]}{tr("\xB0。倾角 0\xB0 表示正面看盘，PA 从天球北向东计。修改只影响本次统计，不改动标注。")}</p></details>
   <div className="stats-assumption"><Info size={16} /><p><b>{tr("盘面估计采用薄盘、固定距离和平行投影近似。")}</b>{tr("先把整个椭圆旋转到星系长短轴，再沿星系短轴乘以 1/cos(i)，重新求半轴。它不是球状气泡的真实三维直径；盘外结构、翘曲和深度差未建模。")}{scope === 'all' && <strong>{tr(" 所有参与者的重复标注未合并，记录数不等于独立气泡数。")}</strong>}</p></div>
-  {blocked ? <div className={error ? 'stats-error-state' : 'stats-empty'} role={error ? 'alert' : 'status'}>{error || tr("正在载入所有已保存目录…")}{error && <button onClick={() => setRefresh(v => v + 1)}>{tr("重新加载")}</button>}</div> : <>
+  {blocked ? <div className={error ? 'stats-error-state' : 'stats-empty'} role={error ? 'alert' : 'status'}>{error || tr("正在载入已保存目录…")}{error && <button onClick={() => setRefresh(v => v + 1)}>{tr("重新加载")}</button>}</div> : <>
   <div className="stats-summary"><div><small>{tr("标注记录数")}</small><b>{filtered.length}<em>{tr(" 条")}</em></b><span>{new Set(filtered.map(b => b.observer_id)).size}{tr(" 位参与者")}{measured.length < source.length ? ' · ' + (source.length - measured.length) + tr(" 条不适用记录已排除") : ''}</span></div><div><small>{tr("投影等效直径中位数")}</small><b>{fmt(quantile(filtered.map(b => b.projected.equivalent_diameter_pc), .5))}<em> pc</em></b><span>{tr("Deq = 2√(ab) \xB7 等面积圆直径")}</span></div><div><small>{tr("盘面估计 Deq 中位数")}</small><b>{fmt(quantile(filtered.map(b => b.disk.equivalent_diameter_pc), .5))}<em> pc</em></b><span>{tr("含倾角修正，依赖薄盘假设")}</span></div><div><small>{tr("盘面星系中心距中位数")}</small><b>{fmt(quantile(filtered.map(b => b.galactocentric_kpc), .5), 2)}<em> kpc</em></b><span>R = √(X² + Y²)</span></div></div>
   {empty ? <div className="stats-empty"><BarChart3 size={32} /><b>{tr("当前范围没有可统计的已保存气泡")}</b><p>{tr("先在地图中确认保存标注，或切换目录范围 / 分类。图谱不会填入演示数据。")}</p></div> : <>
   <div className="stats-charts"><section className="stats-chart"><PlotHeader title={tr("气泡大小分布")} subtitle={tr("相同分箱对比投影与盘面估计；悬停柱形查看数量")} download={() => downloadPlot(histRef.current, 'M31-size-distribution')} /><div className="stats-legend"><span><i style={{
@@ -256,7 +214,7 @@ export default function StatisticsPanel({
   <section className="stats-formulas"><h3>{tr("尺寸如何计算？")}</h3><p>{tr("图中的 a、b 是半轴，统计表中的长径、短径均为 ")}<b>{tr("完整直径")}</b>。</p><code>Deq = 2√(ab)<br />{tr("面积 S = πab")}<br />{tr("盘面短轴方向 Y = Ysky / cos(i)")}</code><p>{tr("线性尺寸随距离 D 成正比；面积随 D\xB2 成正比。在此模型下，盘面 Deq / 投影 Deq = 1/√cos(i)，但两个半轴的伸长还取决于椭圆方向，不能各自套用同一倍率。")}</p></section></div>
   <section className="stats-table-section"><h3>{tr("逐条派生参数 ")}<span>{filtered.length}{tr(" 条 \xB7 ")}{statNames}{tr("口径")}</span></h3><div className="stats-table-scroll"><table><thead><tr><th>{tr("标注 / 参与者")}</th><th>{tr("长径 / pc")}</th><th>{tr("短径 / pc")}</th><th>Deq / pc</th><th>{tr("轴比 b/a")}</th><th>{tr("面积 / pc\xB2")}</th><th>R / kpc</th></tr></thead><tbody>{filtered.slice(0, 300).map(b => <tr key={b.observer_id + b.id}><td><b>{b.name}</b><small>{b.observer_name} · {GRADES[b.confidence]}</small></td><td>{fmt(b[basis].major_pc)}</td><td>{fmt(b[basis].minor_pc)}</td><td>{fmt(b[basis].equivalent_diameter_pc)}</td><td>{fmt(b[basis].axis_ratio, 3)}</td><td>{fmt(b[basis].area_pc2)}</td><td>{fmt(b.galactocentric_kpc, 2)}</td></tr>)}</tbody></table></div>{filtered.length > 300 && <p>{tr("表格显示前 300 条；CSV 导出包含全部筛选结果。")}</p>}</section>
   </>}
-  <p className="stats-footnote">{scope === 'all' ? tr("全体目录载入时间：") + loadedAt : tr("当前目录：") + (viewingName || tr("尚未选择"))}{tr("。图表与 CSV 均使用同一批已保存记录和上方已应用参数。没有测量误差建模、完备性修正或跨用户去重。")}</p>
+  <p className="stats-footnote">{scope === 'all' ? tr("全体目录载入时间：") + loadedAt : tr("当前目录：") + ((scope==='mine'?activeProfile?.name:viewingName) || tr("尚未选择"))}{tr("。图表与 CSV 均使用同一批已保存记录和上方已应用参数。没有测量误差建模、完备性修正或跨用户去重。")}</p>
   </>}
  </div>;
 }

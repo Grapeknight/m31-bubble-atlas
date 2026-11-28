@@ -14,7 +14,9 @@
     "db:generate": "drizzle-kit generate",
     "test": "node scripts/test.mjs",
     "test:api": "node tests/api-local.mjs",
-    "dev:local": "node scripts/start-local.mjs"
+    "users": "node scripts/manage-users.mjs",
+    "dev:local": "node scripts/start-local.mjs",
+    "test:roles": "node tests/roles-local.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

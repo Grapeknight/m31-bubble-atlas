@@ -1,9 +1,9 @@
 import {sqliteTable,text,integer,real,index} from 'drizzle-orm/sqlite-core';
 export const profiles=sqliteTable('profiles',{
- id:text('id').primaryKey(),name:text('name').notNull(),normalizedName:text('normalized_name').notNull().unique(),createdAt:text('created_at').notNull(),
+ id:text('id').primaryKey(),name:text('name').notNull(),normalizedName:text('normalized_name').notNull().unique(),createdAt:text('created_at').notNull(),role:text('role',{enum:['standard','advanced']}).notNull().default('standard'),accessCodeHash:text('access_code_hash'),
 });
 export const profileSessions=sqliteTable('profile_sessions',{
- tokenHash:text('token_hash').primaryKey(),profileId:text('profile_id').notNull(),expiresAt:text('expires_at').notNull(),
+ tokenHash:text('token_hash').primaryKey(),profileId:text('profile_id').notNull(),expiresAt:text('expires_at').notNull(),accessCodeHash:text('access_code_hash'),
 },t=>[index('sessions_expiry').on(t.expiresAt)]);
 export const bubbles=sqliteTable('bubbles',{
  id:text('id').primaryKey(),userId:text('user_id').notNull(),mapId:text('map_id').notNull(),name:text('name').notNull(),notes:text('notes').notNull().default(''),confidence:text('confidence').notNull().default('candidate'),

@@ -12,6 +12,7 @@ import { PALETTES, legendGradient, type Display, type Stretch } from '../lib/col
 import { sameDraft, type Bubble, type Draft } from '../lib/bubbles';
 import metadata from '../lib/map-metadata.json';
 import type { Profile } from '../lib/profiles';
+import {canSeeCatalogueStats} from '../lib/permissions';
 const meta = metadata as MapMeta;
 const DEFAULT: Display = {
   min: 0,
@@ -102,9 +103,12 @@ export default function Workspace({
     [profileBusy, setProfileBusy] = useState(false),
     [renameName, setRenameName] = useState(''),
     [deleteName, setDeleteName] = useState(''),
-    [profileError, setProfileError] = useState('');
+    [profileError, setProfileError] = useState(''),
+    [accessTarget,setAccessTarget] = useState<Profile|null>(null),
+    [accessCode,setAccessCode] = useState('');
   const viewingProfile = profiles.find(p => p.id === viewingId) || activeProfile;
   const canEdit = !!activeProfile && viewingId === activeProfile.id;
+  const canSeeCounts = canSeeCatalogueStats(activeProfile,viewingId);
   const user = activeProfile ? {
     name: activeProfile.name,
     email: activeProfile.name
@@ -131,7 +135,7 @@ export default function Workspace({
     [loading, setLoading] = useState(false),
     [loadError, setLoadError] = useState(''),
     [notice, setNotice] = useState(''),
-    [modal, setModal] = useState<'help' | 'about' | 'export' | 'delete' | 'goto' | 'profiles' | 'manage-profile' | 'statistics' | null>(null),
+    [modal, setModal] = useState<'help' | 'about' | 'export' | 'delete' | 'goto' | 'profiles' | 'manage-profile' | 'statistics' | 'access-code' | null>(null),
     [search, setSearch] = useState(''),
     [filter, setFilter] = useState('all');
   const [helpSection, setHelpSection] = useState('start');
@@ -225,6 +229,7 @@ export default function Workspace({
           error?: string;
           profiles: Profile[];
           current_profile: Profile | null;
+          requires_advanced_password?: boolean;
         };
       if (!r.ok) throw new Error(d.error);
       setProfiles(d.profiles);
@@ -254,7 +259,7 @@ export default function Workspace({
     setViewingId(profile.id);
     setModal(null);
   }
-  async function chooseProfile(action: 'create' | 'select' | 'logout', id?: string) {
+  async function chooseProfile(action: 'create' | 'select' | 'logout' | 'unlock', id?: string, code?: string) {
     if (saving || !mayLeave()) return;
     setProfileBusy(true);
     try {
@@ -266,19 +271,25 @@ export default function Workspace({
           body: JSON.stringify({
             action,
             id,
-            name: profileName
+            name: profileName,
+            ...(code!==undefined?{advanced_password:code}:{})
           })
         }),
         d = (await r.json()) as {
           error?: string;
           profile: Profile | null;
+          requires_advanced_password?: boolean;
         };
-      if (!r.ok) throw new Error(d.error);
+      if (!r.ok) {
+        if(d.requires_advanced_password){setProfileError(tr(d.error||''));return;}
+        throw new Error(d.error);
+      }
       clearSelection();
       if (d.profile?.id !== viewingId) setItems([]);
       setActiveProfile(d.profile);
       setViewingId(d.profile?.id || '');
       setProfileName('');
+      setAccessCode('');setAccessTarget(null);setProfileError('');
       setModal(null);
       await refreshProfiles();
       notify(d.profile ? tr("当前标注者：") + d.profile.name : tr("已退出当前用户名"));
@@ -531,6 +542,7 @@ export default function Workspace({
   }, [draft, baseline, history, future, modal, user, saving, zoom, items, canEdit]);
   const filtered = items.filter(b => (filter === 'all' || b.confidence === filter) && (b.name + ' ' + b.notes + ' ' + b.ra + ' ' + b.dec).toLowerCase().includes(search.toLowerCase()));
   function exportData(format: string) {
+    if(!canSeeCounts)return;
     const date = new Date().toISOString().slice(0, 10),
       stem = `M31-bubbles-${date}`;
     if (format === 'json') download(stem + '.json', JSON.stringify({
@@ -581,7 +593,7 @@ export default function Workspace({
     }));
   };
   return <div className="atlas-app">
-  <header className="app-header"><a className="brand" href="/" aria-label={tr("M31 Bubble Atlas 首页")}><svg width="34" height="34" viewBox="0 0 34 34" fill="none"><ellipse cx="17" cy="17" rx="15" ry="7" transform="rotate(-32 17 17)" /><ellipse cx="17" cy="17" rx="9" ry="14" transform="rotate(-32 17 17)" /><circle cx="17" cy="17" r="3" /></svg><span>M31 <b>Bubble Atlas</b><small>{tr("仙女座星系 \xB7 气泡标注台")}</small></span></a><div className="project-banner">{tr("空泡捕手计划 之 仙女座空泡搜寻")}</div><div className="header-actions"><button className="language-toggle" aria-label="Switch interface language" onClick={()=>setLanguage(language==='zh'?'en':'zh')}>{language==='zh'?'EN':'中文'}</button><button className="stats-entry" onClick={() => setModal('statistics')}><BarChart3 size={16} /><span>{tr("统计图谱")}</span></button><button className="quiet" onClick={() => {
+  <header className="app-header"><a className="brand" href="/" aria-label={tr("M31 Bubble Atlas 首页")}><svg width="34" height="34" viewBox="0 0 34 34" fill="none"><ellipse cx="17" cy="17" rx="15" ry="7" transform="rotate(-32 17 17)" /><ellipse cx="17" cy="17" rx="9" ry="14" transform="rotate(-32 17 17)" /><circle cx="17" cy="17" r="3" /></svg><span>M31 <b>Bubble Atlas</b><small>{tr("仙女座星系 \xB7 气泡标注台")}</small></span></a><div className="project-banner">{tr("空泡捕手计划 之 仙女座空泡搜寻")}</div><div className="header-actions"><button className="language-toggle" aria-label="Switch interface language" onClick={()=>setLanguage(language==='zh'?'en':'zh')}>{language==='zh'?'EN':'中文'}</button>{activeProfile?.advanced_available && activeProfile.role!=='advanced' && <button className="advanced-unlock" title={tr("启用高级功能")} aria-label={tr("启用高级功能")} onClick={()=>{setAccessTarget(activeProfile);setAccessCode('');setProfileError('');setModal('access-code');}}><LockKeyhole size={15}/><span>{tr("启用高级功能")}</span></button>}{activeProfile?.role==='advanced' && <button className="advanced-badge" title={tr("退出高级功能")} aria-label={tr("退出高级功能")} onClick={()=>chooseProfile('select',activeProfile.id)}><CheckCircle2 size={15}/><span>{tr("高级功能已启用")}</span></button>}<button className="stats-entry" onClick={() => setModal('statistics')}><BarChart3 size={16} /><span>{tr("统计图谱")}</span></button><button className="quiet" onClick={() => {
           setHelpSection('start');
           setModal('help');
         }}><HelpCircle size={16} /><span>{tr("使用指南")}</span></button>{user ? <><button className="profile-switch" onClick={() => {
@@ -592,15 +604,15 @@ export default function Workspace({
           setModal('profiles');
         }}><MousePointer2 size={14} />{tr(" 选择用户名")}</button>}</div></header>
   <div className="app-body">
-   <aside className="catalog-panel"><div className="panel-heading"><div><small>OBSERVER CATALOG</small><h2>{viewingProfile ? viewingProfile.name + tr(" 的气泡") : tr("气泡目录")} <span>{items.length}</span></h2></div><button title={tr("重新载入当前目录")} disabled={loading || !viewingId || saving} onClick={() => reload()}><RefreshCw size={15} className={loading ? 'spin' : ''} /></button></div><div className="observers"><div className="observers-heading"><span>{tr("参与者 ")}<b>{profiles.length}</b></span><button title={tr("选择或创建用户名")} onClick={() => {
+   <aside className="catalog-panel"><div className="panel-heading"><div><small>OBSERVER CATALOG</small><h2>{viewingProfile ? viewingProfile.name + tr(" 的气泡") : tr("气泡目录")} {canSeeCounts && <span>{items.length}</span>}</h2></div><button title={tr("重新载入当前目录")} disabled={loading || !viewingId || saving} onClick={() => reload()}><RefreshCw size={15} className={loading ? 'spin' : ''} /></button></div><div className="observers"><div className="observers-heading"><span>{tr("参与者 ")}<b>{profiles.length}</b></span><button title={tr("选择或创建用户名")} onClick={() => {
               refreshProfiles();
               setModal('profiles');
-            }}><Plus size={13} /></button></div><div className="observer-list">{profiles.map(p => <button key={p.id} className={viewingId === p.id ? 'active' : ''} onClick={() => browse(p)}><span className="observer-avatar">{p.name.charAt(0)}</span><span>{p.name}</span>{activeProfile?.id === p.id && <i>{tr("我")}</i>}<b>{p.count || 0}</b></button>)}{!profiles.length && <button onClick={() => setModal('profiles')}>{tr("+ 创建第一个用户名")}</button>}</div></div>{viewingId && !canEdit && <div className="browse-banner"><Eye size={12} /><span>{tr("正在浏览 ")}{viewingProfile?.name}</span><button disabled={profileBusy} onClick={() => chooseProfile('select', viewingId)}>{tr("使用此用户名")}</button></div>}<div className="catalog-search"><Search size={15} /><input aria-label={tr("搜索气泡")} placeholder={tr("搜索名称、坐标或备注")} value={search} onChange={e => setSearch(e.target.value)} /></div><div className="catalog-filter"><select aria-label={tr("筛选气泡分类")} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">{tr("全部分类")}</option>{Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><span>{filtered.length}{tr(" 个结果")}</span></div>
+            }}><Plus size={13} /></button></div><div className="observer-list">{profiles.map(p => <button key={p.id} className={viewingId === p.id ? 'active' : ''} onClick={() => browse(p)}><span className="observer-avatar">{p.name.charAt(0)}</span><span>{p.name}</span>{activeProfile?.id === p.id && <i>{tr("我")}</i>}{canSeeCatalogueStats(activeProfile,p.id) && p.count!==undefined && <b>{p.count}</b>}</button>)}{!profiles.length && <button onClick={() => setModal('profiles')}>{tr("+ 创建第一个用户名")}</button>}</div></div>{viewingId && !canEdit && <div className="browse-banner"><Eye size={12} /><span>{tr("正在浏览 ")}{viewingProfile?.name}</span><button disabled={profileBusy} onClick={() => chooseProfile('select', viewingId)}>{tr("使用此用户名")}</button></div>}<div className="catalog-search"><Search size={15} /><input aria-label={tr("搜索气泡")} placeholder={tr("搜索名称、坐标或备注")} value={search} onChange={e => setSearch(e.target.value)} /></div><div className="catalog-filter"><select aria-label={tr("筛选气泡分类")} value={filter} onChange={e => setFilter(e.target.value)}><option value="all">{tr("全部分类")}</option>{Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>{canSeeCounts && <span>{filtered.length}{tr(" 个结果")}</span>}</div>
     {loadError && <div className="load-error">{loadError}<button onClick={() => reload(true)}>{tr("重试")}</button></div>}
     <div className="catalog-list">{filtered.map((b, i) => <button className={`catalog-item ${draft?.id === b.id ? 'active' : ''}`} key={b.id} onClick={() => {
             if (pick(b)) stage.current?.focus(b);
-          }}><span className="item-number">{String(i + 1).padStart(2, '0')}</span><div><strong>{b.name}</strong><span>{b.ra.toFixed(5)}° · {b.dec.toFixed(5)}°</span><small><i className={'status-dot ' + b.confidence} />{STATUS[b.confidence]} <b>{(2 * b.a_arcsec).toFixed(1)}″ × {(2 * b.b_arcsec).toFixed(1)}″</b></small></div><Crosshair size={14} /></button>)}{!filtered.length && !loading && <div className="catalog-empty"><svg viewBox="0 0 80 64" width="76" height="60"><ellipse cx="38" cy="34" rx="23" ry="15" /><ellipse cx="48" cy="22" rx="13" ry="9" /><path d="M38 11v8m0 31v8M7 34h8m46 0h8" /></svg><b>{search || filter !== 'all' ? tr("没有匹配的气泡") : tr("还没有标注气泡")}</b><p>{user ? tr("点击「添加圆」，从地图上的第一个候选结构开始。") : tr("选择用户名，建立自己的气泡目录，也可浏览所有参与者的标注。")}</p></div>}</div>
-    <div className="catalog-bottom"><div><Eye size={14} /><span>{canEdit ? tr("正在编辑当前用户名的目录") : tr("浏览模式 \xB7 标注按用户名分开")}</span></div><button className="export-main" disabled={!items.length} onClick={() => setModal('export')}><Download size={15} />{tr(" 导出当前目录 ")}<ArrowUpRight size={14} /></button><button className="source-link" onClick={() => setModal('about')}><Info size={13} />{tr(" 数据来源与坐标说明")}</button></div>
+          }}>{canSeeCounts && <span className="item-number">{String(i + 1).padStart(2, '0')}</span>}<div><strong>{b.name}</strong><span>{b.ra.toFixed(5)}° · {b.dec.toFixed(5)}°</span><small><i className={'status-dot ' + b.confidence} />{STATUS[b.confidence]} <b>{(2 * b.a_arcsec).toFixed(1)}″ × {(2 * b.b_arcsec).toFixed(1)}″</b></small></div><Crosshair size={14} /></button>)}{!filtered.length && !loading && <div className="catalog-empty"><svg viewBox="0 0 80 64" width="76" height="60"><ellipse cx="38" cy="34" rx="23" ry="15" /><ellipse cx="48" cy="22" rx="13" ry="9" /><path d="M38 11v8m0 31v8M7 34h8m46 0h8" /></svg><b>{search || filter !== 'all' ? tr("没有匹配的气泡") : tr("还没有标注气泡")}</b><p>{user ? tr("点击「添加圆」，从地图上的第一个候选结构开始。") : tr("选择用户名，建立自己的气泡目录，也可浏览所有参与者的标注。")}</p></div>}</div>
+    <div className="catalog-bottom"><div><Eye size={14} /><span>{canEdit ? tr("正在编辑当前用户名的目录") : tr("浏览模式 \xB7 标注按用户名分开")}</span></div>{canSeeCounts && <button className="export-main" disabled={!items.length} onClick={() => setModal('export')}><Download size={15} />{tr(" 导出当前目录 ")}<ArrowUpRight size={14} /></button>}<button className="source-link" onClick={() => setModal('about')}><Info size={13} />{tr(" 数据来源与坐标说明")}</button></div>
    </aside>
    <main className="map-workspace"><div className="map-toolbar"><div className="tool-group"><button className={tool === 'select' ? 'active' : ''} title={tr("选择 / 调整 (V)")} onClick={() => setTool('select')}><MousePointer2 size={17} /></button><button className={tool === 'pan' ? 'active' : ''} title={tr("平移 (P)")} onClick={() => setTool('pan')}><Hand size={17} /></button></div><button className="add-button" disabled={!canEdit || !ready || saving} onClick={() => {
             if (create()) setTool('select');
@@ -676,7 +688,7 @@ export default function Workspace({
   <footer className="status-bar"><div><span className="live-dot" />{saving ? tr("正在保存") : dirty ? tr("草稿待确认") : canEdit ? tr("当前用户名目录已连接") : viewingId ? tr("浏览其他参与者的目录") : tr("选择用户名后可保存标注")}<span className="footer-divider" />{skyCursor ? <span className="cursor-sky">RA {skyCursor.ra.toFixed(6)}° <span>Dec {skyCursor.dec.toFixed(6)}°</span></span> : <span>{tr("ICRS \xB7 TAN 投影")}</span>}</div><div>{cursor && <span>Aᵥ {cursor.av === null ? tr("无覆盖") : cursor.av.toFixed(3) + ' mag'}{cursor.resolution ? ' · ' + cursor.resolution + tr("″ 分辨率") : ''}</span>}<span className="footer-divider" /><span>{Math.round(zoom * 100)}%</span><button onClick={() => setModal('about')}>{tr("1.6″ / 显示像素 ")}<Info size={12} /></button></div></footer>
   {notice && <div className="toast" role="status"><CheckCircle2 size={16} />{notice}<button title={tr("关闭提示")} onClick={() => setNotice('')}><X size={14} /></button></div>}
   {modal && <div className="modal-backdrop" onClick={() => !saving && !profileBusy && setModal(null)}><section key={modal} className={modal === 'statistics' ? 'modal statistics-modal' : modal === 'help' ? 'modal guide-modal' : 'modal'} role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={e => e.stopPropagation()}><button className="modal-close" title={tr("关闭对话框")} disabled={profileBusy} onClick={() => setModal(null)}><X size={18} /></button>
-   {modal === 'profiles' && <><span className="eyebrow">CHOOSE AN OBSERVER</span><h2 id="modal-title">{tr("选择标注用户名")}</h2><p>{tr("用户名只用来分开标注，无需密码。所有目录公开可浏览；选择已有用户名，也可以继续编辑该目录。")}</p><div className="profile-picker">{profiles.map(p => <div key={p.id}><span className="observer-avatar">{p.name.charAt(0)}</span><span><b>{p.name}</b><small>{p.count || 0}{tr(" 个气泡")}{activeProfile?.id === p.id ? tr(" \xB7 当前标注者") : ''}</small></span><button disabled={profileBusy} onClick={() => browse(p)}>{tr("浏览")}</button><button className="select-profile" disabled={profileBusy} onClick={() => chooseProfile('select', p.id)}>{tr("选择")}</button></div>)}{!profiles.length && <p>{tr("还没有用户名，创建第一个吧。")}</p>}</div>{activeProfile && <button className="manage-profile-button" onClick={() => {
+   {modal === 'profiles' && <><span className="eyebrow">CHOOSE AN OBSERVER</span><h2 id="modal-title">{tr("选择标注用户名")}</h2><p>{tr("所有用户名均可免密码选择，进入后默认普通权限。后台指定的高级用户可输入自己的专用密码启用高级功能。所有标注图均可浏览。")}</p><div className="profile-picker">{profiles.map(p => <div key={p.id}><span className="observer-avatar">{p.name.charAt(0)}</span><span><b>{p.name}</b><small>{canSeeCatalogueStats(activeProfile,p.id) && p.count!==undefined && <>{p.count}{tr(" 个气泡")}</>}{activeProfile?.id === p.id ? tr(" \xB7 当前标注者") : ''}</small></span><button disabled={profileBusy} onClick={() => browse(p)}>{tr("浏览")}</button><button className="select-profile" disabled={profileBusy} onClick={() => chooseProfile('select', p.id)}>{tr("选择")}</button></div>)}{!profiles.length && <p>{tr("还没有用户名，创建第一个吧。")}</p>}</div>{activeProfile && <button className="manage-profile-button" onClick={() => {
             setRenameName(activeProfile.name);
             setDeleteName('');
             setProfileError('');
@@ -684,14 +696,15 @@ export default function Workspace({
           }}><SlidersHorizontal size={14} />{tr(" 管理当前用户：")}{activeProfile.name}</button>}<div className="new-profile"><label className="form-label">{tr("创建新用户名")}<input autoComplete="off" aria-label={tr("新用户名")} placeholder={tr("输入你的名字或观察者编号")} maxLength={100} value={profileName} onChange={e => setProfileName(e.target.value)} onKeyDown={e => {
                 if (e.key === 'Enter' && validUsername(profileName)) chooseProfile('create');
               }} /></label><p className="username-limit">{tr("用户名长度：")}{usernameWidth(profileName)}{tr("/20（汉字计 2，半角字符计 1）")}</p><button className="save-button" disabled={!validUsername(profileName) || profileBusy} onClick={() => chooseProfile('create')}><Plus size={15} />{profileBusy ? tr("正在选择…") : tr("创建并进入")}</button></div></>}
+   {modal === 'access-code' && accessTarget && <><span className="eyebrow">ADVANCED OBSERVER</span><h2 id="modal-title">{tr("启用高级功能")}</h2><p>{accessTarget.name}{tr("：输入部署者为此账户单独设置的专用密码，验证后启用高级功能。")}</p><form onSubmit={e=>{e.preventDefault();chooseProfile('unlock',accessTarget.id,accessCode);}}><label className="form-label">{tr("高级用户专用密码")}<input autoFocus type="password" autoComplete="off" maxLength={256} disabled={profileBusy} value={accessCode} onChange={e=>setAccessCode(e.target.value)} /></label>{profileError && <p className="profile-error" role="alert">{profileError}</p>}<button className="save-button" disabled={profileBusy||!accessCode}>{tr("验证并启用")}</button></form><button className="manage-profile-back" disabled={profileBusy} onClick={()=>{setAccessCode('');browse(accessTarget);}}>{tr("保持普通权限")}</button></>}
    {modal === 'manage-profile' && activeProfile && <><span className="eyebrow">MANAGE OBSERVER</span><h2 id="modal-title">{tr("管理用户名")}</h2><p>{tr("当前用户：")}<b>{activeProfile.name}</b>{tr("。重命名保留全部标注与坐标。")}</p><label className="form-label">{tr("新用户名")}<input aria-label={tr("重命名用户名")} maxLength={100} disabled={profileBusy} value={renameName} onChange={e => setRenameName(e.target.value)} /></label><p className="username-limit">{tr("用户名长度：")}{usernameWidth(renameName)}{tr("/20（汉字计 2，半角字符计 1）")}</p><button className="save-button" disabled={profileBusy || !validUsername(renameName) || renameName === activeProfile.name} onClick={() => manageProfile('rename')}>{tr("保存新用户名")}</button><div className="profile-delete-section"><h3>{tr("删除用户")}</h3><p>{tr("将永久删除 ")}<b>{activeProfile.name}</b>{tr(" 的全部标注，并退出所有使用该用户名的会话。请先导出需要保留的目录。")}</p><label className="form-label">{tr("输入当前完整用户名确认")}<input aria-label={tr("删除用户确认名称")} autoComplete="off" disabled={profileBusy} value={deleteName} onChange={e => setDeleteName(e.target.value)} /></label><button className="profile-delete-confirm" disabled={profileBusy || deleteName !== activeProfile.name} onClick={() => manageProfile('delete')}>{profileBusy ? tr("正在处理…") : tr("永久删除用户及全部标注")}</button></div>{profileError && <p className="profile-error" role="alert">{profileError}</p>}<button className="manage-profile-back" disabled={profileBusy} onClick={() => setModal('profiles')}>{tr("返回用户名名单")}</button></>}
    {modal === 'help' && <HelpGuide initialSection={helpSection} />}
-   {modal === 'statistics' && <StatisticsPanel items={items} viewingId={viewingId} viewingName={viewingProfile?.name || ''} meta={meta} onHelp={() => {
+   {modal === 'statistics' && <StatisticsPanel activeProfile={activeProfile} viewingId={viewingId} viewingName={viewingProfile?.name || ''} meta={meta} onHelp={() => {
           setHelpSection('statistics');
           setModal('help');
         }} />}
    {modal === 'about' && <><span className="eyebrow">DATA & COORDINATES</span><h2 id="modal-title">{tr("可追溯的每一次标注")}</h2><p>{tr("底图来自 Sun et al. 的 M31 PHAT / PHAST 恒星示踪 V 波段消光图，使用本地原始 FITS 的 HEALPix 数值。未做平滑、插值或银河系前景扣除。")}</p><dl className="about-facts"><div><dt>{tr("投影")}</dt><dd>{tr("以 M31 为中心的 ICRS TAN")}</dd></div><div><dt>{tr("显示采样")}</dt><dd>{tr("1.6 角秒 / 像素")}</dd></div><div><dt>{tr("原始有效分辨率")}</dt><dd>{tr("6.44 / 3.22 / 1.61 角秒")}</dd></div><div><dt>{tr("显示数值精度")}</dt><dd>{tr("0.001 mag（仅显示量化）")}</dd></div><div><dt>{tr("椭圆参数")}</dt><dd>{tr("局部切平面半轴；PA 从北向东")}</dd></div></dl><p>{tr("「长轴水平」仅将视图旋转到近似长轴方向（显示基准 38\xB0），不进行盘面去投影。参数在服务端从原始 WCS 重新计算。JSON 另存 96 个 ICRS 边界点，以精确保留绘制轮廓；DS9 椭圆采用局部近似。")}</p><p className="data-note">{tr("透明暗底是未覆盖区域，不代表零消光。中心约 3′ 内受拥挤影响，PHAST 双波段区域细结构较不可靠；较粗分辨率数值会重复到细网格，不能当作独立测量。Hist 使用原始细网格覆盖面积的全局分布。")}</p><div className="source-buttons"><a href={meta.paper_url} target="_blank" rel="noreferrer">{tr("阅读论文 ")}<ArrowUpRight size={14} /></a><a href={meta.source_url} target="_blank" rel="noreferrer">{tr("NADC 数据 ")}<ArrowUpRight size={14} /></a></div></>}
-   {modal === 'export' && <><span className="eyebrow">EXPORT CATALOG</span><h2 id="modal-title">{tr("导出 ")}{viewingProfile?.name}{tr(" 的 ")}{items.length}{tr(" 个气泡")}</h2><p>{tr("仅导出当前浏览目录已确认保存的记录。RA / Dec 为 ICRS 度，a / b 为角秒半轴，PA 从北向东计。")}</p>{dirty && <p className="data-note">{tr("当前草稿尚未保存，不包含在本次导出中。")}</p>}<div className="export-options">{[['csv', tr("CSV 表格"), tr("天球坐标、半轴、PA、分类和备注")], ['json', tr("JSON 完整目录"), tr("包含 WCS、显示设置和精确天球边界")], ['ds9', tr("DS9 区域文件"), tr("用于 SAOImage DS9 的 ICRS 椭圆区域")]].map(([key, title, desc]) => <button key={key} onClick={() => exportData(key)}><Download size={19} /><span><b>{title}</b><small>{desc}</small></span><ArrowUpRight size={17} /></button>)}</div></>}
+   {modal === 'export' && canSeeCounts && <><span className="eyebrow">EXPORT CATALOG</span><h2 id="modal-title">{tr("导出 ")}{viewingProfile?.name}{tr(" 的 ")}{items.length}{tr(" 个气泡")}</h2><p>{tr("仅导出当前浏览目录已确认保存的记录。RA / Dec 为 ICRS 度，a / b 为角秒半轴，PA 从北向东计。")}</p>{dirty && <p className="data-note">{tr("当前草稿尚未保存，不包含在本次导出中。")}</p>}<div className="export-options">{[['csv', tr("CSV 表格"), tr("天球坐标、半轴、PA、分类和备注")], ['json', tr("JSON 完整目录"), tr("包含 WCS、显示设置和精确天球边界")], ['ds9', tr("DS9 区域文件"), tr("用于 SAOImage DS9 的 ICRS 椭圆区域")]].map(([key, title, desc]) => <button key={key} onClick={() => exportData(key)}><Download size={19} /><span><b>{title}</b><small>{desc}</small></span><ArrowUpRight size={17} /></button>)}</div></>}
    {modal === 'delete' && <><span className="eyebrow">DELETE REGION</span><h2 id="modal-title">{tr("删除 ")}{draft?.name}？</h2><p>{tr("这将从当前用户名的目录移除这个椭圆。该操作不影响其他用户名的目录。")}</p><div className="modal-actions"><button onClick={() => setModal(null)}>{tr("取消")}</button><button className="danger" disabled={saving || !canEdit} onClick={remove}>{saving ? tr("正在删除…") : tr("确认删除")}</button></div></>}
    {modal === 'goto' && <><span className="eyebrow">GO TO COORDINATES</span><h2 id="modal-title">{tr("跳转到天球坐标")}</h2><p>{tr("输入 ICRS 十进制度坐标。地图方向不会改变。")}</p><label className="form-label">{tr("RA（度）")}<input type="number" value={jump.ra} onChange={e => setJump(s => ({
               ...s,
